@@ -527,7 +527,7 @@
           <div class="sim-diagram">
             <canvas id="sim-canvas" width="760" height="340"></canvas>
           </div>
-          <p class="sim-note">※ プロジェクター: 16:10画角 / 焦点距離1m / 投影幅 = 設置距離 &times; 2 / 投影高さ = 設置距離 &times; 1.25 / 設置距離上限5m / 連結重なりシロ30cm</p>
+          <p class="sim-note">※ プロジェクター: 16:10画角 / 床置き設置 / 投影幅 = 設置距離 &times; 2 / 投影高さ = 設置距離 &times; 1.25 / 設置距離上限3m / 連結重なりシロ30cm</p>
         </div>
       </div>
     </div>
@@ -570,13 +570,14 @@
     // Projector specs:
     //   - Aspect ratio 16:10
     //   - Throw: projection width = distance * 2, height = distance * 1.25
-    //   - Min distance 1m, max distance 5m
+    //   - Min distance 1m, max distance 3m
     //   - Overlap (seam) when tiling: 0.3m
+    //   - Floor-mounted: light projects horizontally and fans upward
 
     function runSimulator() {
       const W = parseFloat(document.getElementById('sim-width').value) || 10;
       const H = parseFloat(document.getElementById('sim-height').value) || 3;
-      const maxDist = 5;
+      const maxDist = 3;
       const minDist = 1;
       const overlap = 0.3;
 
@@ -752,30 +753,52 @@
       ctx.fillText('[ 正面図: 投影面 ]', wallX + wallPxW / 2, ch - 16);
 
       // --- SIDE VIEW (distance) ---
+      // Floor-mounted projector: sits on the ground at the base of the wall,
+      // projecting horizontally and fanning upward.
       const svX = frontW + 10;
       const svW = sideW;
       const svMargin = 30;
 
-      // Wall line (vertical)
+      // Ground line (horizontal at bottom)
+      const groundY = ch - margin - 30;
+      // Wall line (vertical, sitting on ground)
       const svWallX = svX + svMargin;
-      const svWallTop = margin + 20;
-      const svWallBot = ch - margin - 20;
+      const svWallTop = margin + 10;
       ctx.strokeStyle = '#475569';
       ctx.lineWidth = 3;
       ctx.beginPath();
       ctx.moveTo(svWallX, svWallTop);
-      ctx.lineTo(svWallX, svWallBot);
+      ctx.lineTo(svWallX, groundY);
       ctx.stroke();
 
-      // Projector position
-      const svProjX = svWallX + (svW - svMargin * 2) * 0.85;
-      const svProjY = (svWallTop + svWallBot) / 2;
-
-      // Projection cone
+      // Ground line
+      ctx.strokeStyle = '#334155';
+      ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(svProjX, svProjY);
-      ctx.lineTo(svWallX, svWallTop + 10);
-      ctx.lineTo(svWallX, svWallBot - 10);
+      ctx.moveTo(svX + 10, groundY);
+      ctx.lineTo(svX + svW - 10, groundY);
+      ctx.stroke();
+      // Ground hatching
+      for (let gx = svX + 14; gx < svX + svW - 10; gx += 8) {
+        ctx.beginPath();
+        ctx.moveTo(gx, groundY);
+        ctx.lineTo(gx - 5, groundY + 5);
+        ctx.stroke();
+      }
+
+      // Projector position: on the ground, at a distance from the wall
+      const svProjX = svWallX + (svW - svMargin * 2) * 0.8;
+      const svProjY = groundY; // sitting on the ground
+
+      // Projection cone: from floor-level projector, light fans out
+      // horizontally toward the wall bottom and upward toward the wall top
+      const wallHitBottom = groundY;       // light hits wall at ground level
+      const wallHitTop = svWallTop + 10;   // light reaches top of wall
+
+      ctx.beginPath();
+      ctx.moveTo(svProjX, svProjY - 6);   // projector lens (slightly above ground)
+      ctx.lineTo(svWallX, wallHitTop);      // upper edge of projection
+      ctx.lineTo(svWallX, wallHitBottom);   // lower edge of projection
       ctx.closePath();
       ctx.fillStyle = hexToRgba('#22d3ee', 0.1);
       ctx.fill();
@@ -783,48 +806,75 @@
       ctx.lineWidth = 1;
       ctx.stroke();
 
-      // Projector box
+      // Highlight projected area on wall
+      ctx.strokeStyle = hexToRgba('#22d3ee', 0.7);
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(svWallX, wallHitTop);
+      ctx.lineTo(svWallX, wallHitBottom);
+      ctx.stroke();
+
+      // Projector box (on ground)
       ctx.fillStyle = '#22d3ee';
-      const pbw = 20, pbh = 12;
-      ctx.fillRect(svProjX - pbw / 2, svProjY - pbh / 2, pbw, pbh);
+      const pbw = 22, pbh = 12;
+      ctx.fillRect(svProjX - pbw / 2, svProjY - pbh, pbw, pbh);
       ctx.fillStyle = '#0f172a';
       ctx.font = 'bold 8px sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText('PJ', svProjX, svProjY);
+      ctx.fillText('PJ', svProjX, svProjY - pbh / 2);
 
-      // Distance line
+      // Distance line (along ground)
       ctx.strokeStyle = '#64748b';
       ctx.setLineDash([3, 3]);
       ctx.lineWidth = 1;
+      const distLineY = groundY + 16;
       ctx.beginPath();
-      ctx.moveTo(svWallX, svWallBot + 14);
-      ctx.lineTo(svProjX, svWallBot + 14);
+      ctx.moveTo(svWallX, distLineY);
+      ctx.lineTo(svProjX, distLineY);
       ctx.stroke();
       ctx.setLineDash([]);
-      // Arrow heads
+      // Tick marks
       ctx.beginPath();
-      ctx.moveTo(svWallX, svWallBot + 10); ctx.lineTo(svWallX, svWallBot + 18); ctx.stroke();
+      ctx.moveTo(svWallX, distLineY - 4); ctx.lineTo(svWallX, distLineY + 4); ctx.stroke();
       ctx.beginPath();
-      ctx.moveTo(svProjX, svWallBot + 10); ctx.lineTo(svProjX, svWallBot + 18); ctx.stroke();
-      // Label
+      ctx.moveTo(svProjX, distLineY - 4); ctx.lineTo(svProjX, distLineY + 4); ctx.stroke();
+      // Distance label
       ctx.fillStyle = '#f59e0b';
       ctx.font = 'bold 11px sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
-      ctx.fillText(dist.toFixed(1) + 'm', (svWallX + svProjX) / 2, svWallBot + 18);
+      ctx.fillText(dist.toFixed(1) + 'm', (svWallX + svProjX) / 2, distLineY + 6);
 
-      // Labels
+      // Height label on wall
+      ctx.strokeStyle = '#64748b';
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(svWallX - 14, wallHitTop);
+      ctx.lineTo(svWallX - 14, wallHitBottom);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(svWallX - 18, wallHitTop); ctx.lineTo(svWallX - 10, wallHitTop); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(svWallX - 18, wallHitBottom); ctx.lineTo(svWallX - 10, wallHitBottom); ctx.stroke();
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '9px sans-serif';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(H + 'm', svWallX - 20, (wallHitTop + wallHitBottom) / 2);
+
+      // Section labels
       ctx.fillStyle = '#94a3b8';
       ctx.font = '10px sans-serif';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'bottom';
-      ctx.fillText('壁面', svWallX, svWallTop - 4);
-      ctx.fillText('PJ', svProjX, svWallTop - 4);
+      ctx.fillText('壁面', svWallX, svWallTop - 6);
+      ctx.fillText('床置きPJ', svProjX, svProjY - pbh - 4);
 
       ctx.fillStyle = '#64748b';
       ctx.textBaseline = 'top';
-      ctx.fillText('[ 側面図 ]', (svWallX + svProjX) / 2, ch - 16);
+      ctx.fillText('[ 側面図 ]', (svWallX + svProjX) / 2, ch - 12);
 
       ctx.textBaseline = 'alphabetic';
     }
