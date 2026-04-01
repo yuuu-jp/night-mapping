@@ -216,7 +216,7 @@
       background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 12px;
       padding: 20px; position: relative; overflow: hidden;
     }
-    .sim-diagram canvas { width: 100%; height: 200px; display: block; }
+    .sim-diagram canvas { width: 100%; height: 340px; display: block; }
     .sim-note { font-size: 0.8rem; color: var(--text-muted); margin-top: 16px; text-align: center; }
 
     /* ===== CTA ===== */
@@ -506,7 +506,7 @@
         <button class="sim-btn" onclick="runSimulator()">&#x1f4a1; シミュレーションを実行</button>
 
         <div class="sim-result" id="sim-result">
-          <div class="sim-result-grid">
+          <div class="sim-result-grid" style="grid-template-columns:repeat(4,1fr);">
             <div class="sim-stat">
               <div class="num" id="res-units">-</div>
               <div class="label">プロジェクター台数</div>
@@ -516,14 +516,18 @@
               <div class="label">設置距離（m）</div>
             </div>
             <div class="sim-stat">
+              <div class="num" id="res-layout">-</div>
+              <div class="label">配置（横 &times; 縦）</div>
+            </div>
+            <div class="sim-stat">
               <div class="num" id="res-plan">-</div>
               <div class="label">推奨プラン</div>
             </div>
           </div>
           <div class="sim-diagram">
-            <canvas id="sim-canvas" width="760" height="200"></canvas>
+            <canvas id="sim-canvas" width="760" height="340"></canvas>
           </div>
-          <p class="sim-note">※ プロジェクター: 16:10画角 / 焦点距離1m / 投影幅 = 設置距離 &times; 2 / 設置距離上限5m / 連結重なりシロ30cm</p>
+          <p class="sim-note">※ プロジェクター: 16:10画角 / 焦点距離1m / 投影幅 = 設置距離 &times; 2 / 投影高さ = 設置距離 &times; 1.25 / 設置距離上限5m / 連結重なりシロ30cm</p>
         </div>
       </div>
     </div>
@@ -563,147 +567,266 @@
     document.querySelectorAll('.fade-up').forEach(el => obs.observe(el));
 
     // Simulator
+    // Projector specs:
+    //   - Aspect ratio 16:10
+    //   - Throw: projection width = distance * 2, height = distance * 1.25
+    //   - Min distance 1m, max distance 5m
+    //   - Overlap (seam) when tiling: 0.3m
+
     function runSimulator() {
       const W = parseFloat(document.getElementById('sim-width').value) || 10;
       const H = parseFloat(document.getElementById('sim-height').value) || 3;
-
-      // Projector specs: 16:10 aspect, throw ratio = projection width is 2x distance
-      // Max distance = 5m => max width per unit = 10m
-      // If need wider, add units with 0.3m overlap
       const maxDist = 5;
-      const widthPerUnit = maxDist * 2; // 10m at max distance
-
-      // Calculate distance based on height (16:10 => height = width / 1.6)
-      // At distance d: width = 2d, height = 2d/1.6 = 1.25d
-      // Need height >= H => d >= H / 1.25
-      let distForHeight = H / 1.25;
-      let dist = Math.min(Math.max(distForHeight, 1), maxDist);
-
-      // Width per projector at this distance
-      let wppu = dist * 2;
+      const minDist = 1;
       const overlap = 0.3;
 
-      let units;
+      // 1. Calculate required distance from width and height independently
+      //    width  coverage: wppu = d * 2      => d_w = W / 2
+      //    height coverage: hppu = d * 1.25   => d_h = H / 1.25
+      //    Take the larger (need enough throw to cover at least one tile in both axes)
+      const distForWidth  = W / 2;
+      const distForHeight = H / 1.25;
+      let dist = Math.min(Math.max(Math.max(distForWidth, distForHeight), minDist), maxDist);
+
+      // 2. Per-projector coverage at chosen distance
+      const wppu = dist * 2;     // width  per projector
+      const hppu = dist * 1.25;  // height per projector
+
+      // 3. Determine columns (horizontal) and rows (vertical)
+      let cols, rows;
+
       if (W <= wppu) {
-        units = 1;
+        cols = 1;
       } else {
-        units = Math.ceil((W - wppu) / (wppu - overlap)) + 1;
+        cols = Math.ceil((W - wppu) / (wppu - overlap)) + 1;
       }
 
-      // If we need more than one but distance could be lower, recalculate
-      // Ensure height coverage
-      if (dist * 1.25 < H) {
-        dist = Math.min(H / 1.25, maxDist);
-        wppu = dist * 2;
-        if (W <= wppu) { units = 1; } else {
-          units = Math.ceil((W - wppu) / (wppu - overlap)) + 1;
-        }
+      if (H <= hppu) {
+        rows = 1;
+      } else {
+        rows = Math.ceil((H - hppu) / (hppu - overlap)) + 1;
       }
 
-      // Determine plan
+      const units = cols * rows;
+
+      // 4. Determine plan
       let plan;
       if (units === 1) plan = 'スタンダード';
       else if (units === 2) plan = 'スタンダード連結';
       else plan = 'カスタム';
 
+      // 5. Display results
       document.getElementById('res-units').textContent = units + '台';
       document.getElementById('res-distance').textContent = dist.toFixed(1) + 'm';
+      document.getElementById('res-layout').textContent = cols + ' × ' + rows;
       document.getElementById('res-plan').textContent = plan;
       document.getElementById('sim-result').classList.add('active');
 
-      // Draw diagram
-      drawDiagram(W, H, units, dist, wppu, overlap);
+      // 6. Draw diagram (top-down view: wall face with projector grid overlay)
+      drawDiagram(W, H, cols, rows, dist, wppu, hppu, overlap);
     }
 
-    function drawDiagram(W, H, units, dist, wppu, overlap) {
+    function drawDiagram(W, H, cols, rows, dist, wppu, hppu, overlap) {
       const canvas = document.getElementById('sim-canvas');
       const ctx = canvas.getContext('2d');
       const dpr = window.devicePixelRatio || 1;
+      const canvasH = 340;
       canvas.width = canvas.offsetWidth * dpr;
-      canvas.height = 200 * dpr;
+      canvas.height = canvasH * dpr;
       ctx.scale(dpr, dpr);
       const cw = canvas.offsetWidth;
-      const ch = 200;
-
+      const ch = canvasH;
       ctx.clearRect(0, 0, cw, ch);
 
-      const margin = 40;
-      const wallY = 30;
-      const wallH = 50;
-      const projY = ch - 40;
+      // Layout: left = front view (wall + projector tiles), right = side view (distance)
+      const sideW = 140;
+      const frontW = cw - sideW - 20;
+      const margin = 30;
 
-      // Scale
-      const totalW = Math.max(W, dist + 1);
-      const scale = (cw - margin * 2) / totalW;
+      // --- FRONT VIEW (wall face with projector grid) ---
+      // Scale to fit the wall within frontW x (ch - 2*margin)
+      const drawableW = frontW - margin * 2;
+      const drawableH = ch - margin * 2;
+      const scaleX = drawableW / W;
+      const scaleY = drawableH / H;
+      const scale = Math.min(scaleX, scaleY);
 
-      // Draw wall
-      const wallPx = W * scale;
-      const wallX = (cw - wallPx) / 2;
-      ctx.fillStyle = '#334155';
-      ctx.fillRect(wallX, wallY, wallPx, wallH);
-      ctx.strokeStyle = '#64748b';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(wallX, wallY, wallPx, wallH);
+      const wallPxW = W * scale;
+      const wallPxH = H * scale;
+      const wallX = margin + (drawableW - wallPxW) / 2;
+      const wallY = margin + (drawableH - wallPxH) / 2;
+
+      // Draw wall background
+      ctx.fillStyle = '#1e293b';
+      ctx.fillRect(wallX, wallY, wallPxW, wallPxH);
+      ctx.strokeStyle = '#475569';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(wallX, wallY, wallPxW, wallPxH);
+
+      // Wall dimension labels
       ctx.fillStyle = '#94a3b8';
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText('投影面 ' + W + 'm × ' + H + 'm', cw / 2, wallY + wallH / 2 + 4);
+      ctx.fillText(W + 'm', wallX + wallPxW / 2, wallY - 8);
+      ctx.save();
+      ctx.translate(wallX - 10, wallY + wallPxH / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.fillText(H + 'm', 0, 0);
+      ctx.restore();
 
-      // Draw projectors
-      const projW = 24;
-      const projH = 14;
-      const colors = ['#22d3ee', '#f59e0b', '#a78bfa', '#34d399', '#f87171'];
+      // Draw projector coverage tiles on the wall face
+      const colors = [
+        '#22d3ee', '#f59e0b', '#a78bfa', '#34d399', '#f87171',
+        '#fb923c', '#818cf8', '#2dd4bf', '#e879f9', '#fbbf24'
+      ];
+      let pNum = 0;
 
-      for (let i = 0; i < units; i++) {
-        let projCenterX;
-        if (units === 1) {
-          projCenterX = cw / 2;
-        } else {
-          const startX = wallX + wppu * scale / 2;
-          const spacing = (wppu - overlap) * scale;
-          projCenterX = startX + i * spacing;
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const color = colors[pNum % colors.length];
+          pNum++;
+
+          // Tile position in meters on the wall
+          const tileXm = c * (wppu - overlap);
+          const tileYm = r * (hppu - overlap);
+
+          // Clip to wall bounds
+          const tileWm = Math.min(wppu, W - tileXm);
+          const tileHm = Math.min(hppu, H - tileYm);
+
+          const tx = wallX + tileXm * scale;
+          const ty = wallY + tileYm * scale;
+          const tw = tileWm * scale;
+          const th = tileHm * scale;
+
+          // Fill tile
+          ctx.fillStyle = hexToRgba(color, 0.15);
+          ctx.fillRect(tx, ty, tw, th);
+          ctx.strokeStyle = hexToRgba(color, 0.6);
+          ctx.lineWidth = 1.5;
+          ctx.strokeRect(tx, ty, tw, th);
+
+          // Projector label
+          ctx.fillStyle = color;
+          ctx.font = 'bold 12px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          // Draw projector icon circle
+          const cx = tx + tw / 2;
+          const cy = ty + th / 2;
+          ctx.beginPath();
+          ctx.arc(cx, cy, 14, 0, Math.PI * 2);
+          ctx.fillStyle = hexToRgba(color, 0.25);
+          ctx.fill();
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+          ctx.fillStyle = '#f8fafc';
+          ctx.font = 'bold 10px sans-serif';
+          ctx.fillText('P' + pNum, cx, cy + 1);
         }
-
-        const color = colors[i % colors.length];
-
-        // Projection cone
-        const leftEdge = wallX + (i === 0 ? 0 : i * (wppu - overlap) * scale);
-        const rightEdge = Math.min(leftEdge + wppu * scale, wallX + wallPx);
-
-        ctx.beginPath();
-        ctx.moveTo(projCenterX, projY);
-        ctx.lineTo(leftEdge, wallY + wallH);
-        ctx.lineTo(rightEdge, wallY + wallH);
-        ctx.closePath();
-        ctx.fillStyle = color.replace(')', ',0.1)').replace('rgb', 'rgba').replace('#', '');
-        // manual rgba
-        ctx.fillStyle = hexToRgba(color, 0.1);
-        ctx.fill();
-        ctx.strokeStyle = hexToRgba(color, 0.4);
-        ctx.lineWidth = 1;
-        ctx.stroke();
-
-        // Projector box
-        ctx.fillStyle = color;
-        ctx.fillRect(projCenterX - projW / 2, projY - projH / 2, projW, projH);
-        ctx.fillStyle = '#0f172a';
-        ctx.font = 'bold 9px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('P' + (i + 1), projCenterX, projY + 3);
       }
 
-      // Distance label
-      ctx.strokeStyle = '#64748b';
-      ctx.setLineDash([4, 4]);
+      // Overlap indicators (horizontal)
+      if (cols > 1) {
+        ctx.fillStyle = hexToRgba('#f59e0b', 0.12);
+        for (let c = 1; c < cols; c++) {
+          const ox = wallX + (c * (wppu - overlap) - overlap) * scale; // not needed, just overlap zone
+          const overlapX = wallX + (c * wppu - c * overlap) * scale - overlap * scale;
+          ctx.fillRect(wallX + (c * (wppu - overlap)) * scale - overlap * scale, wallY, overlap * scale, wallPxH);
+        }
+      }
+      // Overlap indicators (vertical)
+      if (rows > 1) {
+        ctx.fillStyle = hexToRgba('#f59e0b', 0.12);
+        for (let r = 1; r < rows; r++) {
+          ctx.fillRect(wallX, wallY + (r * (hppu - overlap)) * scale - overlap * scale, wallPxW, overlap * scale);
+        }
+      }
+
+      // "正面図" label
+      ctx.fillStyle = '#64748b';
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillText('[ 正面図: 投影面 ]', wallX + wallPxW / 2, ch - 16);
+
+      // --- SIDE VIEW (distance) ---
+      const svX = frontW + 10;
+      const svW = sideW;
+      const svMargin = 30;
+
+      // Wall line (vertical)
+      const svWallX = svX + svMargin;
+      const svWallTop = margin + 20;
+      const svWallBot = ch - margin - 20;
+      ctx.strokeStyle = '#475569';
+      ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.moveTo(cw / 2 + wallPx / 2 + 20, wallY + wallH);
-      ctx.lineTo(cw / 2 + wallPx / 2 + 20, projY);
+      ctx.moveTo(svWallX, svWallTop);
+      ctx.lineTo(svWallX, svWallBot);
+      ctx.stroke();
+
+      // Projector position
+      const svProjX = svWallX + (svW - svMargin * 2) * 0.85;
+      const svProjY = (svWallTop + svWallBot) / 2;
+
+      // Projection cone
+      ctx.beginPath();
+      ctx.moveTo(svProjX, svProjY);
+      ctx.lineTo(svWallX, svWallTop + 10);
+      ctx.lineTo(svWallX, svWallBot - 10);
+      ctx.closePath();
+      ctx.fillStyle = hexToRgba('#22d3ee', 0.1);
+      ctx.fill();
+      ctx.strokeStyle = hexToRgba('#22d3ee', 0.4);
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      // Projector box
+      ctx.fillStyle = '#22d3ee';
+      const pbw = 20, pbh = 12;
+      ctx.fillRect(svProjX - pbw / 2, svProjY - pbh / 2, pbw, pbh);
+      ctx.fillStyle = '#0f172a';
+      ctx.font = 'bold 8px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('PJ', svProjX, svProjY);
+
+      // Distance line
+      ctx.strokeStyle = '#64748b';
+      ctx.setLineDash([3, 3]);
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(svWallX, svWallBot + 14);
+      ctx.lineTo(svProjX, svWallBot + 14);
       ctx.stroke();
       ctx.setLineDash([]);
+      // Arrow heads
+      ctx.beginPath();
+      ctx.moveTo(svWallX, svWallBot + 10); ctx.lineTo(svWallX, svWallBot + 18); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(svProjX, svWallBot + 10); ctx.lineTo(svProjX, svWallBot + 18); ctx.stroke();
+      // Label
+      ctx.fillStyle = '#f59e0b';
+      ctx.font = 'bold 11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillText(dist.toFixed(1) + 'm', (svWallX + svProjX) / 2, svWallBot + 18);
+
+      // Labels
       ctx.fillStyle = '#94a3b8';
       ctx.font = '10px sans-serif';
-      ctx.textAlign = 'left';
-      ctx.fillText(dist.toFixed(1) + 'm', cw / 2 + wallPx / 2 + 25, (wallY + wallH + projY) / 2 + 4);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText('壁面', svWallX, svWallTop - 4);
+      ctx.fillText('PJ', svProjX, svWallTop - 4);
+
+      ctx.fillStyle = '#64748b';
+      ctx.textBaseline = 'top';
+      ctx.fillText('[ 側面図 ]', (svWallX + svProjX) / 2, ch - 16);
+
+      ctx.textBaseline = 'alphabetic';
     }
 
     function hexToRgba(hex, alpha) {
